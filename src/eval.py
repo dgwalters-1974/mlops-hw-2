@@ -71,8 +71,7 @@ def _eval_example(pipeline, example: dict, judge_model: str) -> dict:
         "total_output_tokens": sum(c.output_tokens for c in response.model_calls),
         "total_latency_seconds": sum(c.latency_seconds for c in response.model_calls),
         "total_cost_usd": sum(
-            cost_usd(c.model, c.input_tokens, c.output_tokens)
-            for c in response.model_calls
+            cost_usd(c.model, c.input_tokens, c.output_tokens) for c in response.model_calls
         ),
         "judge_verdict": judge_result.verdict.value,
         "judge_raw": judge_result.raw,
@@ -125,6 +124,7 @@ def _compute_metrics(rows: list[dict]) -> dict[str, float]:
         # is the integer count. Mirrors the Prometheus counter
         # `judge_evaluations_total` from Task 4 (one MLflow metric name per
         # verdict, since MLflow run-metrics don't carry labels). See tasks/task1.md.
+        metrics[f"judge_evaluations_total_{verdict}"] = count
 
     total_cost = sum(r["total_cost_usd"] + r["judge_cost_usd"] for r in rows)
     metrics["total_cost_usd"] = total_cost
@@ -139,6 +139,8 @@ def _compute_metrics(rows: list[dict]) -> dict[str, float]:
     # wrap with `float(...)` before storing. Mirrors the Prometheus histogram
     # quantiles for `chat_request_duration_seconds` from Task 4.
     # See tasks/task1.md.
+    metrics["request_latency_p50_seconds"] = float(np.percentile(latencies, 50))
+    metrics["request_latency_p95_seconds"] = float(np.percentile(latencies, 95))
 
     # Token aggregates. Input side is a worked example; you'll add output side.
     in_toks = [r["total_input_tokens"] for r in rows]
@@ -147,6 +149,9 @@ def _compute_metrics(rows: list[dict]) -> dict[str, float]:
     # TODO (Task 1): add `total_output_tokens` and `mean_output_tokens`,
     # mirroring the input-token pattern. Each row has `total_output_tokens`.
     # See tasks/task1.md.
+    out_toks = [r["total_output_tokens"] for r in rows]
+    metrics["total_output_tokens"] = float(sum(out_toks))
+    metrics["mean_output_tokens"] = sum(out_toks) / n
 
     return metrics
 
@@ -170,14 +175,10 @@ def _log_prompt_artifacts(config: AssistantConfig) -> None:
     """
     with tempfile.TemporaryDirectory() as tmpdir:
         d = pathlib.Path(tmpdir)
-        (d / "main_system_prompt.txt").write_text(
-            config.system_prompt, encoding="utf-8"
-        )
+        (d / "main_system_prompt.txt").write_text(config.system_prompt, encoding="utf-8")
         g = config.guardrail
         if isinstance(g, GuardrailInputClassifier):
-            (d / "input_classifier_prompt.txt").write_text(
-                g.classifier.prompt, encoding="utf-8"
-            )
+            (d / "input_classifier_prompt.txt").write_text(g.classifier.prompt, encoding="utf-8")
         elif isinstance(g, GuardrailSandwich):
             (d / "input_classifier_prompt.txt").write_text(
                 g.input_classifier.prompt, encoding="utf-8"
@@ -320,9 +321,7 @@ def main() -> None:
             )
             registered_version = int(mv.version)
             mlflow.set_tag("registered_version", registered_version)
-            mlflow.set_tag(
-                "registered_model_name", settings.mlflow_registered_model_name
-            )
+            mlflow.set_tag("registered_model_name", settings.mlflow_registered_model_name)
 
         print(f"\n=== {config_id} eval summary ===", file=sys.stderr)
         print(f"  run_id:              {run.info.run_id}", file=sys.stderr)
