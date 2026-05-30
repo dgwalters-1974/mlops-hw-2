@@ -29,8 +29,14 @@ import argparse
 import sys
 from pathlib import Path
 
+from mlflow.tracking import MlflowClient
+from src.config import get_settings
+
 REGISTERED_MODEL_NAME = "travel-assistant"
 LOG_FILE = Path(__file__).resolve().parent.parent / "promotion-log.jsonl"
+
+# Instantiate the client once at the top of the file so that i don't have to do it everytime
+client = MlflowClient(tracking_uri=get_settings().mlflow_tracking_uri)
 
 
 def cmd_set(args: argparse.Namespace) -> None:
@@ -45,8 +51,14 @@ def cmd_show(args: argparse.Namespace) -> None:
 
 def cmd_list(args: argparse.Namespace) -> None:
     """No args. See tasks/task2.md → cmd_list."""
-    raise NotImplementedError("Implement cmd_list — see tasks/task2.md")
-
+    model = client.get_registered_model(REGISTERED_MODEL_NAME)
+    if not model.aliases:
+        print("no aliases set")
+        return
+    
+    for alias in model.aliases:
+        mv = client.get_model_version_by_alias(REGISTERED_MODEL_NAME, alias)
+        print(f"{alias} -> {mv.tags['config_id']}")
 
 def cmd_rollback(args: argparse.Namespace) -> None:
     """args.alias: str. See tasks/task2.md → cmd_rollback."""
