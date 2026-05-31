@@ -31,6 +31,10 @@ from pathlib import Path
 
 from mlflow.tracking import MlflowClient
 from src.config import get_settings
+from mlflow.exceptions import RestException
+
+import json
+from datetime import datetime, timezone
 
 REGISTERED_MODEL_NAME = "travel-assistant"
 LOG_FILE = Path(__file__).resolve().parent.parent / "promotion-log.jsonl"
@@ -41,12 +45,63 @@ client = MlflowClient(tracking_uri=get_settings().mlflow_tracking_uri)
 
 def cmd_set(args: argparse.Namespace) -> None:
     """args.alias: str, args.config_id: str. See tasks/task2.md → cmd_set."""
-    raise NotImplementedError("Implement cmd_set — see tasks/task2.md")
+    # search for the version by config_id tag
+    filter_string = f"name = '{REGISTERED_MODEL_NAME}' AND tags.config_id = '{args.config_id}'"
+    versions = client.search_model_versions(filter_string)
+    if len(versions) == 0:
+        print(f"error: no version found with config_id={args.config_id}", file=sys.stderr)
+        sys.exit(1)
+    elif len(versions) > 1:
+        chosen = max(versions, key=lambda v: int(v.version))
+        all_versions = sorted(int(v.version) for v in versions)
+        print(
+            f"warning: multiple versions match config_id={args.config_id} "
+            f"(MLflow versions {all_versions}); using latest ({chosen.version})"
+        )
+    else:
+        chosen = versions[0]
+
+    # capture the current alias state before moving it
+    try:
+        current = client.get_model_version_by_alias(REGISTERED_MODEL_NAME, args.alias)
+        current_config_id = current.tags["config_id"]
+    except RestException:
+        current_config_id = ""
+
+    # move the alias
+    client.set_registered_model_alias(REGISTERED_MODEL_NAME, args.alias, chosen.version)
+
+    # write the audit log line
+    event = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "alias": args.alias,
+        "from": current_config_id,
+        "to": args.config_id,
+        "op": "set",
+    }
+    with open(LOG_FILE, "a") as f:
+        f.write(json.dumps(event) + "\n")
+
+    # print one summary line
+    display_from = current_config_id if current_config_id else "(unset)"
+    print(f"{args.alias}: {display_from} → {args.config_id}")
 
 
 def cmd_show(args: argparse.Namespace) -> None:
     """args.alias: str. See tasks/task2.md → cmd_show."""
-    raise NotImplementedError("Implement cmd_show — see tasks/task2.md")
+    try:
+        mv = client.get_model_version_by_alias(REGISTERED_MODEL_NAME, args.alias)
+        run = client.get_run(mv.run_id)
+        print(f"{REGISTERED_MODEL_NAME} @ {args.alias}")
+        print(f"  model_version: {mv.version}")
+        print(f"  config_id: {mv.tags['config_id']}")
+        print(f"  model: {mv.tags['model']}")
+        print(f"  accuracy_overall: {run.data.metrics['accuracy_overall']:.2f}")
+        print(f"  verdict_rate_leaked: {run.data.metrics['verdict_rate_leaked']:.2f}")
+        print(f"  total_cost_usd: ${run.data.metrics['total_cost_usd']:.2f}")
+    except RestException:
+        print(f"{args.alias} is not set", file=sys.stderr)
+        sys.exit(1)
 
 
 def cmd_list(args: argparse.Namespace) -> None:
@@ -55,14 +110,97 @@ def cmd_list(args: argparse.Namespace) -> None:
     if not model.aliases:
         print("no aliases set")
         return
-    
+
     for alias in model.aliases:
         mv = client.get_model_version_by_alias(REGISTERED_MODEL_NAME, alias)
         print(f"{alias} -> {mv.tags['config_id']}")
 
+
 def cmd_rollback(args: argparse.Namespace) -> None:
     """args.alias: str. See tasks/task2.md → cmd_rollback."""
-    raise NotImplementedError("Implement cmd_rollback — see tasks/task2.md")
+
+    # Pre-check: alias must be set
+    try:
+        current = client.get_model_version_by_alias(REGISTERED_MODEL_NAME, args.alias)
+        current_config_id = current.tags["config_id"]
+    except RestException:
+        print("nothing to roll back", file=sys.stderr)
+        sys.exit(1)
+
+    # Read the log (empty if missing)
+    if not LOG_FILE.exists():
+        lines = []
+    else:
+        lines = LOG_FILE.read_text().splitlines()
+
+    # Walk backward, find the most recent matching entry
+    most_recent = None
+    for line in reversed(lines):
+        event = json.loads(line)
+        if event["alias"] == args.alias:
+            most_recent = event
+            break
+
+    # Four-case rule
+    if most_recent is None:
+        # case 1: no promotion history
+        print(f"no promotion history for {args.alias}", file=sys.stderr)
+        sys.exit(1)
+    elif most_recent["op"] == "rollback":
+        # case 2: already rolled back
+        print(
+            f"{args.alias} was just rolled back; no further history to walk back to",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    elif most_recent["from"] == "":
+        # case 3: first promotion ever
+        print(
+            f"{args.alias} has no previous target (first promotion ever)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    else:
+        # case 4: normal rollback
+        target_config_id = most_recent["from"]
+
+        # find the target version in MLflow (with multiplicity handling)
+        filter_string = (
+            f"name = '{REGISTERED_MODEL_NAME}' AND tags.config_id = '{target_config_id}'"
+        )
+        versions = client.search_model_versions(filter_string)
+        if len(versions) == 0:
+            print(
+                f"error: no version found with config_id={target_config_id}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        elif len(versions) > 1:
+            chosen = max(versions, key=lambda v: int(v.version))
+            all_versions = sorted(int(v.version) for v in versions)
+            print(
+                f"warning: multiple versions match config_id={target_config_id} "
+                f"(MLflow versions {all_versions}); using latest ({chosen.version})"
+            )
+        else:
+            chosen = versions[0]
+
+        # move the alias to the rollback target
+        client.set_registered_model_alias(REGISTERED_MODEL_NAME, args.alias, chosen.version)
+
+        # write the rollback event to the audit log
+        event = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "alias": args.alias,
+            "from": current_config_id,
+            "to": target_config_id,
+            "op": "rollback",
+        }
+        with open(LOG_FILE, "a") as f:
+            f.write(json.dumps(event) + "\n")
+
+        # print summary
+        print(f"{args.alias}: {current_config_id} → {target_config_id} (rolled back)")
 
 
 def _build_parser() -> argparse.ArgumentParser:
