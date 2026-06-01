@@ -1,0 +1,7 @@
+"What's wrong with a local-file audit log in a real production deployment? Name one concrete failure mode."
+
+I think that one of the strengths of the pipeline inherent in this repo / project is that it communicates all locally run experiments / updates via api/servers to a central server (MLFlow). By having a local file audit log this advantage is lost as in a production environment it's limited to one user since there would rapidly be conflicts between multiple users each with their own logs. As an example of a 'concrete failure mode, I can envisage an example where user A rolls back his state to the previous one which user B is unaware of (or vice versa).
+
+"If you were extending this CLI to production use, name one feature you'd add (other than policy enforcement) and why."
+
+I would add a 'compare' functionality. This would output a side by side evaluation of e.g. two versions evaluated on the same data so that a comparison can be made more easily in real time. In particular one could compare the current champion vs a challenger: e.g. 'python scripts/promote.py compare production v7' for a new hypothetical model 'v7'. While this can theoretically already be done by opening two MLFlow tabs, a 'compare' function would make the comparison a one line CLI step which could then be followed by 'set production ...' depending on the outcome.

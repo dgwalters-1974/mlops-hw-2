@@ -1,6 +1,6 @@
 # Task 3 / Part D — live `/chat` (travel request)
 
-A real travel question hitting the deployed v6. All three sandwich stages run: `input_classifier` (categorises as `travel`), `main_assistant` (generates the response), `output_validator` (returns `ok`). `model_calls` having three entries proves the sandwich pipeline is wired up in the live service.
+A real travel question hitting the new version v6. All three sandwich stages run: `input_classifier` (categorises as `travel`), `main_assistant` (generates the response), `output_validator` (returns `ok`). `model_calls` having three entries proves the sandwich pipeline is wired up in the live service.
 
 ```
 (.venv) dgwalters@boomer mlops-hw-2 % curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" -d '{"message": "What is the cheapest flight from London to Tokyo?"}'                       

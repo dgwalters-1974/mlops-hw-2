@@ -1,0 +1,3 @@
+# Task 1 — Writeup
+
+Three blocks were added inside '_compute_metrics' - per verdict counts, latency (p50, p95) and output token aggregates. Percentiles were used instead of e.g. simple mean since the latencies were heavy tailed with some calls taking much longer than others (perhaps due to inconsistencies in the llm response times / start up etc.) thereby potentially skewing the simple statistics and making them unrepresentative.
